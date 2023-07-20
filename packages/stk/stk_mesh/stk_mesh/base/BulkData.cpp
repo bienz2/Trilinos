@@ -100,10 +100,6 @@
 #include <utility>                      // for pair, make_pair, swap
 #include <vector>                       // for vector, etc
 
-#ifndef STK_HIDE_DEPRECATED_CODE
-#include <stk_mesh/base/DumpMeshInfo.hpp>
-#endif
-
 namespace stk {
 namespace mesh {
 
@@ -413,7 +409,7 @@ BulkData::BulkData(std::shared_ptr<MetaData> mesh_meta_data,
 
   impl::check_size_of_types();
 
-  register_observer(m_meshDiagnosticObserver, ModificationObserverPriority::STK_INTERNAL);
+  register_observer(m_meshDiagnosticObserver);
 
   init_mesh_consistency_check_mode();
 
@@ -528,14 +524,29 @@ void BulkData::require_good_rank_and_id(EntityRank ent_rank, EntityId ent_id) co
 
 void BulkData::mark_entity_and_upward_related_entities_as_modified(Entity entity)
 {
-  impl::OnlyVisitUnchanged ovu(*this);
   BulkData& mesh = *this;
 
   auto markAsModified = [&](Entity ent) { mesh.set_state(ent, Modified); };
 
   auto onlyVisitUnchanged = [&](Entity ent) { return mesh.state(ent) == Unchanged; };
 
-  impl::VisitUpwardClosureGeneral(*this, entity, markAsModified, onlyVisitUnchanged);
+  if (mesh.state(entity) == Unchanged) {
+    impl::VisitUpwardClosureGeneral(mesh, entity, markAsModified, onlyVisitUnchanged);
+  }
+  else if (mesh.state(entity) == Modified) {
+
+    EntityRank endRank = static_cast<EntityRank>(mesh_meta_data().entity_rank_count());
+    EntityRank beginRank = static_cast<EntityRank>(entity_rank(entity)+1);
+  
+    for(EntityRank rank=beginRank; rank<endRank; ++rank) {
+      const unsigned numConnected = num_connectivity(entity, rank);
+      if (numConnected > 0) {
+        const Entity* beginConnected = begin(entity, rank);
+        const Entity* endConnected = end(entity, rank);
+        impl::VisitUpwardClosureGeneral(mesh, beginConnected, endConnected, markAsModified, onlyVisitUnchanged);
+      }
+    }
+  }
 }
 
 size_t BulkData::count_relations(Entity entity, bool onlyDownwardRelations) const
@@ -1766,10 +1777,9 @@ void BulkData::reallocate_field_data(stk::mesh::FieldBase & field)
   }
 }
 
-void BulkData::register_observer(std::shared_ptr<ModificationObserver> observer,
-                                 ModificationObserverPriority priority) const
+void BulkData::register_observer(std::shared_ptr<ModificationObserver> observer) const
 {
-    notifier.register_observer(observer, priority);
+    notifier.register_observer(observer);
 }
 
 void BulkData::unregister_observer(std::shared_ptr<ModificationObserver> observer) const
@@ -1822,7 +1832,8 @@ void BulkData::new_bucket_callback(EntityRank rank, const PartVector& superset_p
     m_num_fields = field_set.size();
   }
 
-  m_field_data_manager->allocate_bucket_field_data(rank, field_set, superset_parts, capacity);
+  const unsigned newBucketSize = 0;
+  m_field_data_manager->allocate_bucket_field_data(rank, field_set, superset_parts, newBucketSize, capacity);
 }
 
 //
@@ -1894,7 +1905,7 @@ void BulkData::add_entity_callback(EntityRank rank, unsigned bucketId, unsigned 
   const std::vector<FieldBase *> &fields = mesh_meta_data().get_fields();
 
   if (m_field_data_manager->get_bucket_capacity(rank, bucketId) < bucketCapacity) {
-    m_field_data_manager->grow_bucket_capacity(fields, rank, bucketId, bucketCapacity);
+    m_field_data_manager->grow_bucket_capacity(fields, rank, bucketId, indexInBucket, bucketCapacity);
   }
 
   m_field_data_manager->add_field_data_for_entity(fields, rank, bucketId, indexInBucket);
@@ -1940,6 +1951,12 @@ void BulkData::destroy_bucket_callback(EntityRank rank, Bucket const& dying_buck
 
   const std::vector<FieldBase*>&  fields = mesh_meta_data().get_fields();
   m_field_data_manager->deallocate_bucket_field_data(rank, bucket_id, capacity, fields);
+}
+
+void BulkData::reset_empty_field_data_callback(EntityRank rank, unsigned bucketId, unsigned bucketSize,
+                                               unsigned bucketCapacity, const FieldVector & fields)
+{
+  m_field_data_manager->reset_empty_field_data(rank, bucketId, bucketSize, bucketCapacity, fields);
 }
 
 void BulkData::update_field_data_states(FieldBase* field)
@@ -2018,20 +2035,6 @@ void BulkData::reorder_buckets_callback(EntityRank rank, const std::vector<unsig
   const std::vector<FieldBase*>  fields = mesh_meta_data().get_fields();
   m_field_data_manager->reorder_bucket_field_data(rank, fields, reorderedBucketIds);
 }
-
-#ifndef STK_HIDE_DEPRECATED_CODE
-STK_DEPRECATED_MSG("Use stk::mesh::impl::dump_mesh_bucket_info() from DumpMeshInfo.hpp instead")
-void BulkData::dump_mesh_bucket_info(std::ostream& out, Bucket* bucket) const
-{
-  impl::dump_mesh_bucket_info(*this, out, bucket);
-}
-
-STK_DEPRECATED_MSG("Use stk::mesh::impl::dump_all_mesh_info() from DumpMeshInfo.hpp instead")
-void BulkData::dump_all_mesh_info(std::ostream& out) const
-{
-  impl::dump_all_mesh_info(*this, out);
-}
-#endif
 
 void BulkData::reserve_relation(Entity entity, const unsigned num)
 {
@@ -6002,7 +6005,7 @@ bool BulkData::initialize_face_adjacent_element_graph()
     {
         m_elemElemGraph = new ElemElemGraph(*this);
         m_elemElemGraphUpdater = std::make_shared<ElemElemGraphUpdater>(*this,*m_elemElemGraph);
-        register_observer(m_elemElemGraphUpdater, ModificationObserverPriority::STK_INTERNAL);
+        register_observer(m_elemElemGraphUpdater);
         return true;
     }
     return false;
@@ -6072,14 +6075,6 @@ void BulkData::create_side_entities(const SideSet &sideSet, const stk::mesh::Par
     if(has_face_adjacent_element_graph())
         FaceCreator(*this, *m_elemElemGraph).create_side_entities_given_sideset(sideSet, parts);
 }
-
-#ifndef STK_HIDE_DEPRECATED_CODE
-STK_DEPRECATED_MSG("Use stk::mesh::impl::dump_mesh_per_proc() from DumpMeshInfo.hpp instead")
-void BulkData::dump_mesh_per_proc(const std::string& fileNamePrefix) const
-{
-  impl::dump_mesh_per_proc(*this, fileNamePrefix);
-}
-#endif
 
 bool BulkData::does_sideset_exist(const stk::mesh::Part &part) const
 {

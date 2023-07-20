@@ -787,17 +787,6 @@ public:
       return m_closure_count[entity.local_offset()] > static_cast<uint16_t>(0);
   }
 
-#ifndef STK_HIDE_DEPRECATED_CODE
-  STK_DEPRECATED_MSG("Use stk::mesh::impl::dump_all_mesh_info() from DumpMeshInfo.hpp instead")
-  void dump_all_mesh_info(std::ostream& out) const;
-
-  STK_DEPRECATED_MSG("Use stk::mesh::impl::dump_mesh_per_proc() from DumpMeshInfo.hpp instead")
-  void dump_mesh_per_proc(const std::string& fileNamePrefix) const;
-
-  STK_DEPRECATED_MSG("Use stk::mesh::impl::dump_mesh_bucket_info() from DumpMeshInfo.hpp instead")
-  void dump_mesh_bucket_info(std::ostream& out, Bucket* bucket) const;
-#endif
-
   // memoized version
   BucketVector const& get_buckets(EntityRank rank, Selector const& selector) const;
 
@@ -831,8 +820,7 @@ public:
 
   const std::string & get_last_modification_description() const { return m_lastModificationDescription; }
 
-  void register_observer(std::shared_ptr<stk::mesh::ModificationObserver> observer,
-                         stk::mesh::ModificationObserverPriority priority) const;
+  void register_observer(std::shared_ptr<stk::mesh::ModificationObserver> observer) const;
   void unregister_observer(std::shared_ptr<ModificationObserver> observer) const;
   template<typename ObserverType>
   bool has_observer_type() const { return notifier.has_observer_type<ObserverType>(); }
@@ -1365,6 +1353,8 @@ private:
 
   void remove_entity_field_data_callback(EntityRank rank, unsigned bucket_id, unsigned bucket_ord);
   void add_entity_callback(EntityRank rank, unsigned bucketId, unsigned bucketCapacity, unsigned indexInBucket);
+  void reset_empty_field_data_callback(EntityRank rank, unsigned bucketId, unsigned bucketSize,
+                                       unsigned bucketCapacity, const FieldVector & fields);
 
   void initialize_arrays();
 
